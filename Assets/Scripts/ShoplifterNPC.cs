@@ -8,27 +8,26 @@ public class ShoplifterNPC : NPCBase
     public ShoplifterState CurrentState => currentState;
 
     private NavMeshAgent navAgent;
-    public Transform[] wanderPoints;
-    public Transform[] stealPoints;
-    public Transform exitPoint;
     public Material shoplifterMaterial;
     public float lookAroundTime = 2f;
     public float stealTime = 3f;
     public LayerMask playerLayer;
+    [SerializeField] private float wanderRadius = 10f; // Radius within stall
+    public Transform stallCenter; // Changed to public
     private float timer = 0f;
-    private int currentWanderPointIndex = 0;
-    private int currentStealPointIndex = 0;
     private bool hasReachedDestination = false;
     private bool isObserved = false;
+    private Transform targetShelf;
 
     void Start()
     {
-        npcType = NPCBase.NPCType.Shoplifter;
+        npcType = NPCType.Shoplifter;
+        hasStolen = false;
         navAgent = GetComponent<NavMeshAgent>();
 
-        if (wanderPoints.Length == 0 || stealPoints.Length == 0 || exitPoint == null)
+        if (stallCenter == null)
         {
-            Debug.LogError($"Missing references in {gameObject.name}: WanderPoints={wanderPoints.Length}, StealPoints={stealPoints.Length}, ExitPoint={exitPoint}", gameObject);
+            Debug.LogError($"Missing stallCenter reference in {gameObject.name}", gameObject);
             enabled = false;
             return;
         }
@@ -51,7 +50,7 @@ public class ShoplifterNPC : NPCBase
         if (!enabled || isPaused) return;
 
         isObserved = IsPlayerObserving();
-        Debug.Log($"Shoplifter {gameObject.name}: State={currentState}, Observed={isObserved}, StealPointIndex={currentStealPointIndex}, WanderPointIndex={currentWanderPointIndex}");
+        Debug.Log($"Shoplifter {gameObject.name}: State={currentState}, Observed={isObserved}");
 
         switch (currentState)
         {
@@ -75,6 +74,7 @@ public class ShoplifterNPC : NPCBase
         currentState = newState;
         hasReachedDestination = false;
         timer = 0f;
+        targetShelf = null;
         Debug.Log($"Shoplifter {gameObject.name} transitioned to state: {newState}");
     }
 
@@ -96,13 +96,10 @@ public class ShoplifterNPC : NPCBase
     {
         if (!hasReachedDestination)
         {
-            if (wanderPoints[currentWanderPointIndex] == null)
+            if (TryFindRandomPoint(stallCenter.position, wanderRadius, out Vector3 point))
             {
-                Debug.LogError($"Wander point {currentWanderPointIndex} is null!", this);
-                return;
+                navAgent.SetDestination(point);
             }
-            navAgent.SetDestination(wanderPoints[currentWanderPointIndex].position);
-            Debug.DrawLine(transform.position, wanderPoints[currentWanderPointIndex].position, Color.blue, 1f);
             if (!navAgent.pathPending && navAgent.remainingDistance < 0.5f)
             {
                 hasReachedDestination = true;
@@ -114,91 +111,54 @@ public class ShoplifterNPC : NPCBase
     private void HandleLookAround()
     {
         timer += Time.deltaTime;
-        if (stealPoints == null || stealPoints.Length == 0)
-        {
-            Debug.LogError("stealPoints array not set or empty!", this);
-            SetState(ShoplifterState.Run);
-            return;
-        }
-        if (currentStealPointIndex < 0 || currentStealPointIndex >= stealPoints.Length)
-        {
-            Debug.LogError($"currentStealPointIndex {currentStealPointIndex} out of bounds!", this);
-            SetState(ShoplifterState.Run);
-            return;
-        }
-        if (stealPoints[currentStealPointIndex] == null)
-        {
-            Debug.LogError($"Steal point {currentStealPointIndex} is null!", this);
-            SetState(ShoplifterState.Run);
-            return;
-        }
-        float distanceToStealPoint = Vector3.Distance(transform.position, stealPoints[currentStealPointIndex].position);
-        Debug.Log($"Distance to steal point {currentStealPointIndex}: {distanceToStealPoint}");
         if (timer >= lookAroundTime)
         {
-            if (!isObserved)
+            if (isObserved)
             {
-                Debug.Log($"Transitioning to AttemptSteal at steal point {currentStealPointIndex}");
-                SetState(ShoplifterState.AttemptSteal);
+                SetState(ShoplifterState.Wander);
             }
             else
             {
-                Debug.Log($"Cannot steal: Observed={isObserved}, Distance={distanceToStealPoint}");
-                currentWanderPointIndex = (currentWanderPointIndex + 1) % wanderPoints.Length;
-                SetState(ShoplifterState.Wander);
+                Collider[] shelves = Physics.OverlapSphere(transform.position, 3f, LayerMask.GetMask("Shelf"));
+                if (shelves.Length > 0)
+                {
+                    targetShelf = shelves[Random.Range(0, shelves.Length)].transform;
+                    SetState(ShoplifterState.AttemptSteal);
+                }
+                else
+                {
+                    SetState(ShoplifterState.Wander);
+                }
             }
         }
     }
 
     private void HandleAttemptSteal()
     {
-        // Defensive checks
-        if (stealPoints == null || stealPoints.Length == 0)
+        if (targetShelf == null)
         {
-            Debug.LogError("stealPoints array not set or empty!", this);
-            SetState(ShoplifterState.Run);
-            return;
-        }
-        if (currentStealPointIndex < 0 || currentStealPointIndex >= stealPoints.Length)
-        {
-            Debug.LogError($"currentStealPointIndex {currentStealPointIndex} out of bounds!", this);
-            SetState(ShoplifterState.Run);
-            return;
-        }
-        if (stealPoints[currentStealPointIndex] == null)
-        {
-            Debug.LogError($"Steal point {currentStealPointIndex} is null!", this);
-            SetState(ShoplifterState.Run);
+            SetState(ShoplifterState.Wander);
             return;
         }
 
         if (!hasReachedDestination)
         {
-            navAgent.SetDestination(stealPoints[currentStealPointIndex].position);
-            Debug.DrawLine(transform.position, stealPoints[currentStealPointIndex].position, Color.red, 1f);
+            navAgent.SetDestination(targetShelf.position);
+            Debug.DrawLine(transform.position, targetShelf.position, Color.red, 1f);
             if (!navAgent.pathPending && navAgent.remainingDistance < 0.5f)
             {
                 hasReachedDestination = true;
                 timer = stealTime;
-                Debug.Log($"Reached steal point {currentStealPointIndex}, starting steal timer");
+                Debug.Log($"Reached shelf for stealing");
             }
         }
         else
         {
-            // Check if the StealableItem still exists
-            Transform item = stealPoints[currentStealPointIndex].Find("StealableItem");
+            Transform item = targetShelf.Find("StealableItem");
             if (item == null)
             {
-                Debug.Log("Item already stolen or missing, skipping to next steal point.");
-                currentStealPointIndex++;
-                if (currentStealPointIndex >= stealPoints.Length)
-                {
-                    SetState(ShoplifterState.Run);
-                }
-                else
-                {
-                    SetState(ShoplifterState.Wander);
-                }
+                Debug.Log("No item to steal on this shelf, moving on.");
+                SetState(ShoplifterState.Wander);
                 return;
             }
 
@@ -213,19 +173,10 @@ public class ShoplifterNPC : NPCBase
                 timer -= Time.deltaTime;
                 if (timer <= 0f)
                 {
-                    Debug.Log($"Theft successful at steal point {currentStealPointIndex}");
+                    Debug.Log($"Theft successful at shelf");
                     Destroy(item.gameObject);
-
                     GameManager.Instance.OnTheftSuccessful(this);
-                    currentStealPointIndex++;
-                    if (currentStealPointIndex >= stealPoints.Length)
-                    {
-                        SetState(ShoplifterState.Run);
-                    }
-                    else
-                    {
-                        SetState(ShoplifterState.Wander);
-                    }
+                    SetState(ShoplifterState.Run);
                 }
             }
         }
@@ -235,18 +186,16 @@ public class ShoplifterNPC : NPCBase
     {
         if (!hasReachedDestination)
         {
-            if (exitPoint == null)
+            if (TryFindRandomPoint(stallCenter.position, wanderRadius * 2f, out Vector3 point))
             {
-                Debug.LogError("Exit point is null!", this);
-                return;
-            }
-            navAgent.SetDestination(exitPoint.position);
-            navAgent.speed *= 1.5f;
-            Debug.DrawLine(transform.position, exitPoint.position, Color.yellow, 1f);
-            if (!navAgent.pathPending && navAgent.remainingDistance < 0.5f)
-            {
-                hasReachedDestination = true;
-                Destroy(gameObject);
+                navAgent.SetDestination(point);
+                navAgent.speed *= 1.5f;
+                Debug.DrawLine(transform.position, point, Color.yellow, 1f);
+                if (!navAgent.pathPending && navAgent.remainingDistance < 0.5f)
+                {
+                    hasReachedDestination = true;
+                    Destroy(gameObject);
+                }
             }
         }
     }
@@ -269,23 +218,35 @@ public class ShoplifterNPC : NPCBase
 
     public void Accuse()
     {
-        if (currentState == ShoplifterState.Run)
+        if (currentState == ShoplifterState.Run && hasStolen)
         {
-            GameManager.Instance.OnPoliceCalled(this);
+            GameManager.Instance.OnSuccessfulAccusation(this);
             Destroy(gameObject);
         }
     }
 
+    private bool TryFindRandomPoint(Vector3 center, float radius, out Vector3 result)
+    {
+        for (int i = 0; i < 10; i++)
+        {
+            Vector3 randomPoint = center + Random.insideUnitSphere * radius;
+            randomPoint.y = center.y;
+            if (NavMesh.SamplePosition(randomPoint, out NavMeshHit hit, radius, NavMesh.AllAreas))
+            {
+                result = hit.position;
+                return true;
+            }
+        }
+        result = center;
+        return false;
+    }
+
     void OnDrawGizmos()
     {
-        if (stealPoints != null)
+        if (targetShelf != null)
         {
             Gizmos.color = Color.red;
-            for (int i = 0; i < stealPoints.Length; i++)
-            {
-                if (stealPoints[i] != null)
-                    Gizmos.DrawSphere(stealPoints[i].position, 0.5f);
-            }
+            Gizmos.DrawSphere(targetShelf.position, 0.5f);
         }
     }
 }

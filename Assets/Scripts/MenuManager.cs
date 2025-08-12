@@ -10,10 +10,22 @@ public class MenuManager : MonoBehaviour
     [Header("Scene To Load")]
     public string sceneToLoad = "03_Street";
 
+    [Header("Audio Settings")]
+    public AudioSource backgroundMusicSource;
+    public AudioClip backgroundMusicClip;
+
     void Start()
     {
         mainMenu.SetActive(true);
         settingsMenu.SetActive(false);
+
+        // Initialize background music
+        if (backgroundMusicSource != null && backgroundMusicClip != null)
+        {
+            backgroundMusicSource.clip = backgroundMusicClip;
+            backgroundMusicSource.loop = true;
+            backgroundMusicSource.Play();
+        }
     }
 
     public void StartGame()

@@ -3,32 +3,28 @@ using UnityEngine.AI;
 
 public class NormalShopperNPC : NPCBase
 {
-    private enum ShopperState { EnterStore, Browse, Buy, Leave }
-    private ShopperState currentState = ShopperState.EnterStore;
+    private enum ShopperState { Wander, Browse, Buy }
+    private ShopperState currentState = ShopperState.Wander;
 
     private NavMeshAgent navAgent;
-    public Transform storeEntrance;
-    public Transform[] browsePoints;
-    public Transform checkoutPoint;
-    public Transform exitPoint;
-
     [SerializeField] private float minBrowseTimePerShelf = 4f;
     [SerializeField] private float maxBrowseTimePerShelf = 7f;
     [SerializeField] private float buyTime = 3f;
     private float timer = 0f;
-    private int currentBrowsePointIndex = 0;
     private bool hasReachedDestination = false;
-
+    [SerializeField] private float wanderRadius = 10f; // Radius within stall
+    public Transform stallCenter; // Changed to public
     public Material shopperMaterial;
 
     void Start()
     {
-        npcType = NPCBase.NPCType.NormalShopper;
+        npcType = NPCType.NormalShopper;
+        hasStolen = false;
         navAgent = GetComponent<NavMeshAgent>();
 
-        if (storeEntrance == null || browsePoints.Length == 0 || checkoutPoint == null || exitPoint == null)
+        if (stallCenter == null)
         {
-            Debug.LogError($"Missing references in {gameObject.name}: StoreEntrance={storeEntrance}, BrowsePoints={browsePoints.Length}, CheckoutPoint={checkoutPoint}, ExitPoint={exitPoint}", gameObject);
+            Debug.LogError($"Missing stallCenter reference in {gameObject.name}", gameObject);
             enabled = false;
             return;
         }
@@ -39,7 +35,7 @@ public class NormalShopperNPC : NPCBase
             renderer.material = shopperMaterial;
         }
 
-        SetState(ShopperState.EnterStore);
+        SetState(ShopperState.Wander);
     }
 
     void Update()
@@ -48,17 +44,14 @@ public class NormalShopperNPC : NPCBase
 
         switch (currentState)
         {
-            case ShopperState.EnterStore:
-                HandleEnterStore();
+            case ShopperState.Wander:
+                HandleWander();
                 break;
             case ShopperState.Browse:
                 HandleBrowse();
                 break;
             case ShopperState.Buy:
                 HandleBuy();
-                break;
-            case ShopperState.Leave:
-                HandleLeave();
                 break;
         }
     }
@@ -88,11 +81,14 @@ public class NormalShopperNPC : NPCBase
         Debug.Log($"NormalShopper {gameObject.name} resumed");
     }
 
-    private void HandleEnterStore()
+    private void HandleWander()
     {
         if (!hasReachedDestination)
         {
-            navAgent.SetDestination(storeEntrance.position);
+            if (TryFindRandomPoint(stallCenter.position, wanderRadius, out Vector3 point))
+            {
+                navAgent.SetDestination(point);
+            }
             if (!navAgent.pathPending && navAgent.remainingDistance < 0.5f)
             {
                 hasReachedDestination = true;
@@ -105,11 +101,19 @@ public class NormalShopperNPC : NPCBase
     {
         if (!hasReachedDestination)
         {
-            navAgent.SetDestination(browsePoints[currentBrowsePointIndex].position);
-            if (!navAgent.pathPending && navAgent.remainingDistance < 0.5f)
+            Collider[] shelves = Physics.OverlapSphere(transform.position, 3f, LayerMask.GetMask("Shelf"));
+            if (shelves.Length > 0)
             {
-                hasReachedDestination = true;
-                timer = Random.Range(minBrowseTimePerShelf, maxBrowseTimePerShelf);
+                navAgent.SetDestination(shelves[Random.Range(0, shelves.Length)].transform.position);
+                if (!navAgent.pathPending && navAgent.remainingDistance < 0.5f)
+                {
+                    hasReachedDestination = true;
+                    timer = Random.Range(minBrowseTimePerShelf, maxBrowseTimePerShelf);
+                }
+            }
+            else
+            {
+                SetState(ShopperState.Wander);
             }
         }
         else
@@ -117,50 +121,33 @@ public class NormalShopperNPC : NPCBase
             timer -= Time.deltaTime;
             if (timer <= 0f)
             {
-                currentBrowsePointIndex++;
-                if (currentBrowsePointIndex >= browsePoints.Length)
-                {
-                    SetState(ShopperState.Buy);
-                }
-                else
-                {
-                    hasReachedDestination = false;
-                }
+                SetState(ShopperState.Buy);
             }
         }
     }
 
     private void HandleBuy()
     {
-        if (!hasReachedDestination)
+        timer += Time.deltaTime;
+        if (timer >= buyTime)
         {
-            navAgent.SetDestination(checkoutPoint.position);
-            if (!navAgent.pathPending && navAgent.remainingDistance < 0.5f)
-            {
-                hasReachedDestination = true;
-                timer = buyTime;
-            }
-        }
-        else
-        {
-            timer -= Time.deltaTime;
-            if (timer <= 0f)
-            {
-                SetState(ShopperState.Leave);
-            }
+            SetState(ShopperState.Wander);
         }
     }
 
-    private void HandleLeave()
+    private bool TryFindRandomPoint(Vector3 center, float radius, out Vector3 result)
     {
-        if (!hasReachedDestination)
+        for (int i = 0; i < 10; i++)
         {
-            navAgent.SetDestination(exitPoint.position);
-            if (!navAgent.pathPending && navAgent.remainingDistance < 0.5f)
+            Vector3 randomPoint = center + Random.insideUnitSphere * radius;
+            randomPoint.y = center.y;
+            if (NavMesh.SamplePosition(randomPoint, out NavMeshHit hit, radius, NavMesh.AllAreas))
             {
-                hasReachedDestination = true;
-                Destroy(gameObject);
+                result = hit.position;
+                return true;
             }
         }
+        result = center;
+        return false;
     }
 }

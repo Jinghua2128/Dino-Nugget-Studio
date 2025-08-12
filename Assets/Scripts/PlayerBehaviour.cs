@@ -1,5 +1,7 @@
 using UnityEngine;
 using UnityEngine.EventSystems;
+using UnityEngine.UI;
+using TMPro;
 
 public class PlayerBehaviour : MonoBehaviour
 {
@@ -7,10 +9,20 @@ public class PlayerBehaviour : MonoBehaviour
     
     public Camera mainCamera;
     public LayerMask npcLayer;
-    public PlayerInteractUI interactUI;
+    public LayerMask itemLayer;
     public float interactionRange = 5f;
     
+    [Header("UI Elements")]
+    public CanvasGroup interactCanvas;
+    public Button interactButton;
+    public Button accuseButton;
+    public TMP_Text promptText;
+    
+    [Header("Item Handling")]
     public GameObject HeldItem { get; private set; }
+    private Vector3 holdOffset = new Vector3(0f, 1f, 1f);
+    private float shelfPlaceHeight = 0.5f;
+    
     private NPCBase selectedNPC;
 
     void Awake()
@@ -35,11 +47,17 @@ public class PlayerBehaviour : MonoBehaviour
                 Debug.LogError("No Main Camera found!", this);
             }
         }
-        
-        if (interactUI == null)
+
+        if (interactCanvas != null)
         {
-            Debug.LogError("PlayerInteractUI not assigned!", this);
+            interactCanvas.alpha = 0f;
+            interactCanvas.interactable = false;
+            interactCanvas.blocksRaycasts = false;
         }
+
+        if (interactButton != null) interactButton.onClick.AddListener(OnInteractButtonClicked);
+        if (accuseButton != null) accuseButton.onClick.AddListener(OnAccuseButtonClicked);
+        if (promptText != null) promptText.gameObject.SetActive(false);
     }
 
     void Update()
@@ -52,17 +70,15 @@ public class PlayerBehaviour : MonoBehaviour
     {
         if (Input.GetMouseButtonDown(0) && !EventSystem.current.IsPointerOverGameObject())
         {
-            if (npcLayer.value == 0) return;
-            
             Ray ray = mainCamera.ScreenPointToRay(Input.mousePosition);
-            if (Physics.Raycast(ray, out RaycastHit hit, 100f, npcLayer))
+            if (Physics.Raycast(ray, out RaycastHit hit, 100f, npcLayer | itemLayer))
             {
-                HandleNPCHit(hit.collider.GetComponent<NPCBase>());
+                HandleHit(hit);
             }
             else if (selectedNPC != null)
             {
                 selectedNPC.Resume();
-                interactUI.HideUI();
+                HideUI();
                 selectedNPC = null;
             }
         }
@@ -72,17 +88,32 @@ public class PlayerBehaviour : MonoBehaviour
     {
         if (Input.GetKeyDown(KeyCode.E) && !EventSystem.current.IsPointerOverGameObject())
         {
-            if (npcLayer.value == 0) return;
-            
             Vector3 mousePos = Input.mousePosition;
             mousePos.z = mainCamera.nearClipPlane;
             Vector3 direction = (mainCamera.ScreenToWorldPoint(mousePos) - transform.position).normalized;
             Ray ray = new Ray(transform.position, direction);
             
-            if (Physics.Raycast(ray, out RaycastHit hit, interactionRange, npcLayer))
+            if (Physics.Raycast(ray, out RaycastHit hit, interactionRange, npcLayer | itemLayer))
             {
-                HandleNPCHit(hit.collider.GetComponent<NPCBase>());
+                HandleHit(hit);
             }
+        }
+    }
+
+    private void HandleHit(RaycastHit hit)
+    {
+        NPCBase npc = hit.collider.GetComponent<NPCBase>();
+        if (npc != null)
+        {
+            HandleNPCHit(npc);
+        }
+        else if (hit.collider.CompareTag("StealableItem") && HeldItem == null)
+        {
+            HandleItemInteraction(hit.collider.gameObject);
+        }
+        else if (hit.collider.CompareTag("Shelf") && HeldItem != null)
+        {
+            HandleShelfInteraction(hit.collider.transform);
         }
     }
 
@@ -91,17 +122,122 @@ public class PlayerBehaviour : MonoBehaviour
         if (npc != null)
         {
             selectedNPC = npc;
-            interactUI.ShowUI(npc);
+            ShowInteractUI(npc);
+        }
+    }
+
+    public void ShowInteractUI(NPCBase npc)
+    {
+        if (interactCanvas == null || interactButton == null || accuseButton == null) return;
+
+        selectedNPC = npc;
+        accuseButton.gameObject.SetActive(npc.npcType == NPCBase.NPCType.Shoplifter || npc.npcType == NPCBase.NPCType.Distractor);
+        interactCanvas.alpha = 1f;
+        interactCanvas.interactable = true;
+        interactCanvas.blocksRaycasts = true;
+    }
+
+    public void HideUI()
+    {
+        if (interactCanvas != null)
+        {
+            interactCanvas.alpha = 0f;
+            interactCanvas.interactable = false;
+            interactCanvas.blocksRaycasts = false;
+        }
+        if (promptText != null) promptText.gameObject.SetActive(false);
+        selectedNPC = null;
+    }
+
+    private void OnInteractButtonClicked()
+    {
+        if (selectedNPC != null)
+        {
+            selectedNPC.Interact();
+            HideUI();
+        }
+    }
+
+    private void OnAccuseButtonClicked()
+    {
+        if (selectedNPC != null)
+        {
+            GameManager.Instance.SetCurrentNPC(selectedNPC);
+            HideUI();
         }
     }
 
     public void HoldItem(GameObject item)
     {
         HeldItem = item;
+        item.transform.SetParent(transform);
+        item.transform.localPosition = holdOffset;
+        item.transform.localRotation = Quaternion.identity;
+        if (item.TryGetComponent<Collider>(out var col))
+        {
+            col.enabled = false;
+        }
+        if (promptText != null) promptText.gameObject.SetActive(false);
     }
 
     public void ReleaseItem()
     {
+        if (HeldItem == null) return;
+        HeldItem.transform.SetParent(null);
+        if (HeldItem.TryGetComponent<Collider>(out var col))
+        {
+            col.enabled = true;
+        }
         HeldItem = null;
+    }
+
+    private void HandleItemInteraction(GameObject item)
+    {
+        if (HeldItem != null) return;
+        HoldItem(item);
+    }
+
+    private void HandleShelfInteraction(Transform shelf)
+    {
+        if (HeldItem == null) return;
+        HeldItem.transform.SetParent(shelf); // Attach to shelf
+        HeldItem.transform.localPosition = Vector3.up * shelfPlaceHeight;
+        HeldItem.transform.localRotation = Quaternion.identity;
+
+        // Check if this is a task shelf and not already completed
+        if (GameManager.Instance.IsTaskShelf(shelf))
+        {
+            GameManager.Instance.HandleTaskCompletion(shelf);
+        }
+
+        ReleaseItem();
+    }
+
+    private void OnTriggerEnter(Collider other)
+    {
+        if (other.CompareTag("StealableItem") && HeldItem == null)
+        {
+            if (promptText != null)
+            {
+                promptText.text = "Press E to Pick Up";
+                promptText.gameObject.SetActive(true);
+            }
+        }
+        else if (other.CompareTag("Shelf") && HeldItem != null)
+        {
+            if (promptText != null)
+            {
+                promptText.text = "Press E to Place Item";
+                promptText.gameObject.SetActive(true);
+            }
+        }
+    }
+
+    private void OnTriggerExit(Collider other)
+    {
+        if (other.CompareTag("StealableItem") || other.CompareTag("Shelf"))
+        {
+            if (promptText != null) promptText.gameObject.SetActive(false);
+        }
     }
 }

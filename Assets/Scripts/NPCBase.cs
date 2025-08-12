@@ -5,7 +5,7 @@ public abstract class NPCBase : MonoBehaviour
     public enum NPCType { NormalShopper, Shoplifter, Distractor }
     public NPCType npcType;
     protected bool isPaused = false;
-    public bool hasStolen = false; // Add this field (set dynamically based on npcType or game logic)
+    public bool hasStolen = false;
 
     public virtual string Interact()
     {
@@ -18,13 +18,11 @@ public abstract class NPCBase : MonoBehaviour
         isPaused = false;
     }
 
-    // Optional: Override in subclasses or set in Awake/Start based on npcType
-    protected virtual void Awake()
+    protected virtual void Start()
     {
-        // Example: Set hasStolen based on type (customize as needed)
-        if (npcType == NPCType.Shoplifter)
+        if (npcType == NPCType.Shoplifter || npcType == NPCType.Distractor)
         {
-            hasStolen = true; // Or randomize: hasStolen = Random.value > 0.5f;
+            hasStolen = false; // Set true only on successful theft
         }
     }
 }

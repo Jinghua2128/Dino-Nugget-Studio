@@ -5,10 +5,10 @@ TagManager:
   serializedVersion: 3
   tags:
   - CinemachineTarget
-  - FallenItem
   - 'Exit '
   - Checkout
   - Shelf
+  - StealableItem
   layers:
   - Default
   - TransparentFX
